@@ -163,8 +163,8 @@ def _setup_driver(headless: bool, chromium_path: str, chromedriver_path: str):
 
     if not chromium_path:
         import shutil
-        for candidate in ("chromium", "chromium-browser", "google-chrome", "/usr/bin/chromium"):
-            if candidate.startswith("/") or shutil.which(candidate):
+        for candidate in ("chromium", "chromium-browser", "google-chrome"):
+            if shutil.which(candidate):
                 chromium_path = candidate
                 break
     if chromium_path:
@@ -172,8 +172,8 @@ def _setup_driver(headless: bool, chromium_path: str, chromedriver_path: str):
 
     if not chromedriver_path:
         import shutil
-        for candidate in ("chromedriver", "/usr/bin/chromedriver"):
-            if candidate.startswith("/") or shutil.which(candidate):
+        for candidate in ("chromedriver",):
+            if shutil.which(candidate):
                 chromedriver_path = candidate
                 break
 
