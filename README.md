@@ -8,6 +8,8 @@
 
 ```bash
 pip install commonhuman-core
+pip install commonhuman-core[browser]   # + headless Chromium crawler (requires selenium)
+pip install commonhuman-core[openapi]   # + YAML OpenAPI/Swagger support (requires pyyaml)
 ```
 
 ---
@@ -31,6 +33,9 @@ Every CommonHuman-Lab scanner needs to speak HTTP: proxy routing, cookie injecti
 from commonhuman_core.http import HttpClient
 from commonhuman_core.crawler import crawl, CrawlResult
 from commonhuman_core.passive import fetch_seed
+from commonhuman_core.auth import form_login, bearer_login
+from commonhuman_core.openapi import load_openapi, ApiEndpoint
+from commonhuman_core.browser_crawler import browser_crawl
 ```
 
 ---
@@ -44,6 +49,9 @@ from commonhuman_core.passive import fetch_seed
 | `commonhuman_core.http.parse_post_data` | Parse urlencoded or JSON POST bodies into a flat dict |
 | `commonhuman_core.crawler` | BFS web crawler — link + form discovery, page source storage |
 | `commonhuman_core.passive` | Passive recon helpers — `fetch_seed()` |
+| `commonhuman_core.auth` | Form login, OAuth2 bearer, CSRF extraction — returns cookies + headers |
+| `commonhuman_core.openapi` | OpenAPI 2.x / 3.x spec parser — expands paths to scannable `ApiEndpoint` list |
+| `commonhuman_core.browser_crawler` | Headless Chromium BFS URL discovery for JS-rendered SPAs (optional: selenium) |
 
 ---
 
@@ -178,6 +186,91 @@ if resp:
 ```
 
 Useful for a single passive check before starting an active scan — confirms the target is reachable and returns a response worth analysing.
+
+---
+
+### `auth`
+
+Authenticate against a login form or OAuth2 token endpoint before scanning. Returns cookies and headers that can be forwarded to any `HttpClient`.
+
+```python
+from commonhuman_core.auth import form_login, bearer_login
+
+# Form-based login — GET page, extract CSRF, POST credentials
+auth = form_login(
+    login_url="https://target.com/login",
+    username="admin",
+    password="secret",
+    # username_field="username",  # default
+    # password_field="password",  # default
+)
+print(auth.cookies)   # "session=abc; csrf=xyz"
+print(auth.headers)   # {"Authorization": "Bearer ..."} if JSON token returned
+
+# OAuth2 client-credentials
+auth = bearer_login(
+    token_url="https://target.com/oauth/token",
+    client_id="my-client",
+    client_secret="my-secret",
+)
+```
+
+`auth.is_empty()` returns `True` when login produced no usable credentials (useful for early-exit checks).
+
+---
+
+### `openapi`
+
+Parse an OpenAPI 2.x (Swagger) or 3.x spec and expand every path into a list of ready-to-scan URLs. Path parameters like `{id}` are substituted with sensible placeholders (`1` for integers, a fixed UUID for UUID params).
+
+```python
+from commonhuman_core.openapi import load_openapi
+
+# Accepts a file path, a URL, or a raw JSON/YAML string
+endpoints = load_openapi("https://target.com/openapi.json", base_url="https://target.com")
+endpoints = load_openapi("/path/to/swagger.yaml")   # requires pyyaml
+
+for ep in endpoints:
+    print(ep.method, ep.url)        # GET https://target.com/users/1
+    print(ep.query_params)          # ["filter", "page"]
+    print(ep.body_params)           # ["name", "email"]
+```
+
+YAML support requires the optional `pyyaml` dependency:
+
+```bash
+pip install commonhuman-core[openapi]
+```
+
+---
+
+### `browser_crawler`
+
+Headless Chromium BFS crawler that discovers URLs from JavaScript-rendered pages — invisible to HTTP-layer crawlers. Returns a flat list of same-origin URLs found across rendered DOM links.
+
+```python
+from commonhuman_core.browser_crawler import browser_crawl
+
+urls = browser_crawl(
+    start_url="https://target.com/",
+    max_pages=50,
+    max_depth=3,
+    cookies="session=abc",          # injected before crawling
+    headless=True,
+    # chromium_path="/usr/bin/chromium",   # auto-detected by default
+    # chromedriver_path="/usr/bin/chromedriver",
+    spa_wait_s=1.5,                 # seconds to wait for JS to settle per page
+)
+
+for url in urls:
+    print(url)
+```
+
+Requires the optional `selenium` dependency:
+
+```bash
+pip install commonhuman-core[browser]
+```
 
 ---
 
