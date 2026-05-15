@@ -310,6 +310,39 @@ class TestCrawl:
         assert isinstance(result, CrawlResult)
         assert result.visited_urls == []
 
+    def test_path_param_candidate_detected_from_json_url(self):
+        """URLs with numeric path segments that return JSON are added to path_param_candidates."""
+        r = MagicMock()
+        r.status_code = 200
+        r.headers     = {"content-type": "application/json"}
+        r.url         = "https://example.com/api/items/1"
+        index = _html_resp('<html><a href="/api/items/1">item</a></html>')
+        inj   = self._make_injector([index, r])
+        result = crawl("https://example.com/", inj, max_pages=5, max_depth=1)
+        assert "https://example.com/api/items/1" in result.path_param_candidates
+
+    def test_code_tag_paths_followed_as_links(self):
+        """URL-like strings inside <code> tags are queued as links to visit."""
+        api_resp = MagicMock()
+        api_resp.status_code = 200
+        api_resp.headers     = {"content-type": "application/json"}
+        api_resp.url         = "https://example.com/api/v1/users/42"
+        index = _html_resp('<html><code>/api/v1/users/42</code></html>')
+        inj   = self._make_injector([index, api_resp])
+        result = crawl("https://example.com/", inj, max_pages=5, max_depth=1)
+        assert "https://example.com/api/v1/users/42" in result.path_param_candidates
+
+    def test_non_numeric_path_not_a_candidate(self):
+        """Paths without numeric segments are not added to path_param_candidates."""
+        r = MagicMock()
+        r.status_code = 200
+        r.headers     = {"content-type": "application/json"}
+        r.url         = "http://example.com/api/status"
+        index = _html_resp('<a href="/api/status">s</a>')
+        inj   = self._make_injector([_html_resp('<html><a href="/api/status">s</a></html>'), r])
+        result = crawl("http://example.com/", inj, max_pages=5, max_depth=1)
+        assert "http://example.com/api/status" not in result.path_param_candidates
+
     def test_duplicate_url_in_batch_deduplicated(self):
         start_html = '<html><a href="/a">a</a><a href="/b">b</a></html>'
         ab_html    = _html_resp(

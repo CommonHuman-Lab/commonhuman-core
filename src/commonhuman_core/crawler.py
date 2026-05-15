@@ -37,10 +37,11 @@ class FormTarget:
 @dataclass
 class CrawlResult:
     """Aggregated output of a crawl run."""
-    visited_urls: List[str]                       = field(default_factory=list)
-    form_targets: List[FormTarget]                = field(default_factory=list)
-    url_params:   List[Tuple[str, List[str]]]     = field(default_factory=list)
-    page_sources: Dict[str, str]                  = field(default_factory=dict)
+    visited_urls:        List[str]                   = field(default_factory=list)
+    form_targets:        List[FormTarget]            = field(default_factory=list)
+    url_params:          List[Tuple[str, List[str]]] = field(default_factory=list)
+    page_sources:        Dict[str, str]              = field(default_factory=dict)
+    path_param_candidates: List[str]                 = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,11 @@ def crawl(
                     result.url_params.append((url, params))
 
                 if not html:
+                    # If the URL has a numeric path segment, surface it so callers
+                    # can probe path-parameter injection (e.g. /item/1).
+                    _path_parts = up.urlparse(url).path.split("/")
+                    if any(p and p.lstrip("-").isdigit() for p in _path_parts):
+                        result.path_param_candidates.append(url)
                     continue
 
                 result.visited_urls.append(url)
@@ -181,19 +187,43 @@ def _fetch_page(
 # ---------------------------------------------------------------------------
 
 
+_CODE_PATH_RE = re.compile(r'^(/[A-Za-z0-9/_\-]+(?:/\d+|/\{[^}]+\}|/:[A-Za-z][A-Za-z0-9_]*))')
+
+
 class _LinkParser(HTMLParser):
     def __init__(self, base_url: str) -> None:
         super().__init__()
-        self.base_url = base_url
-        self.links: List[str] = []
+        self.base_url    = base_url
+        self.links:      List[str] = []
+        self._in_code    = False
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
-        if tag.lower() != "a":
+        tag_lower = tag.lower()
+        if tag_lower == "code":
+            self._in_code = True
+            return
+        if tag_lower != "a":
             return
         attr_dict = {k.lower(): v for k, v in attrs if v is not None}
         href = attr_dict.get("href", "").strip()
         if not href or href.startswith(("javascript:", "mailto:", "#")):
             return
+        self._add(href)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "code":
+            self._in_code = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._in_code:
+            return
+        text = data.strip()
+        # Extract the leading path from <code> content (e.g. "/api/items/1?q=x").
+        path_only = text.split("?")[0].split(" ")[0]
+        if _CODE_PATH_RE.match(path_only):
+            self._add(text)
+
+    def _add(self, href: str) -> None:
         try:
             abs_url = up.urljoin(self.base_url, href)
             parsed  = up.urlparse(abs_url)
