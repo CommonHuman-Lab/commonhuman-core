@@ -6,6 +6,7 @@ HttpClient — shared HTTP session for CommonHuman-Lab scanners.
 
 from __future__ import annotations
 
+import random
 import time
 import urllib.parse as up
 from typing import Any, Dict, List, Optional
@@ -20,11 +21,24 @@ from ._cookies import parse_cookie_string
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-DEFAULT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
+_UA_POOL: List[str] = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+]
+
+# Kept for backwards compatibility — prefer random_ua() for new code.
+DEFAULT_UA = _UA_POOL[0]
+
+
+def random_ua() -> str:
+    """Return a random realistic browser User-Agent string."""
+    return random.choice(_UA_POOL)
 
 _RATE_LIMIT_BACKOFF  = 5.0  # seconds to wait on 429
 _RATE_LIMIT_RETRIES  = 2    # max retries on 429
@@ -69,7 +83,7 @@ class HttpClient:
         self._session.mount("http://",  adapter)
         self._session.mount("https://", adapter)
 
-        base_headers: Dict[str, str] = {"User-Agent": DEFAULT_UA}
+        base_headers: Dict[str, str] = {"User-Agent": random_ua()}
         if headers:
             base_headers.update(headers)
         self._session.headers.update(base_headers)
