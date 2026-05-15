@@ -126,12 +126,15 @@ def crawl(
                     continue
                 html, links, forms = page
 
-                result.visited_urls.append(url)
-                result.page_sources[url] = html
-
                 params = injector.get_params(url)
                 if params:
                     result.url_params.append((url, params))
+
+                if not html:
+                    continue
+
+                result.visited_urls.append(url)
+                result.page_sources[url] = html
 
                 for form in forms:
                     result.form_targets.append(form)
@@ -164,7 +167,7 @@ def _fetch_page(
 
     ct = resp.headers.get("content-type", "")
     if "html" not in ct and "javascript" not in ct:
-        return None
+        return ("", [], [])
 
     html = resp.text
     # Use the final URL after redirects as the base so relative links and

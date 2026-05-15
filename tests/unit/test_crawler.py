@@ -250,7 +250,7 @@ class TestCrawl:
         result = crawl("https://example.com/", inj, max_pages=10)
         assert len(set(result.visited_urls)) == len(result.visited_urls)
 
-    def test_non_html_response_not_stored(self):
+    def test_non_html_response_not_in_visited_urls(self):
         r = MagicMock()
         r.status_code = 200
         r.headers     = {"content-type": "application/json"}
@@ -258,6 +258,19 @@ class TestCrawl:
         inj = self._make_injector([r])
         result = crawl("https://example.com/", inj, max_pages=1)
         assert result.visited_urls == []
+
+    def test_non_html_url_params_still_extracted(self):
+        """JSON-returning endpoints must still surface URL query params for injection."""
+        r = MagicMock()
+        r.status_code = 200
+        r.headers     = {"content-type": "application/json"}
+        r.url         = "https://example.com/"
+        inj = self._make_injector([r])
+        inj.get_params.side_effect = lambda url: ["id"] if "id=" in url else []
+        result = crawl("https://example.com/?id=1", inj, max_pages=1)
+        assert result.visited_urls == []
+        assert len(result.url_params) == 1
+        assert "id" in result.url_params[0][1]
 
     def test_off_origin_url_filtered(self):
         html = '<html><a href="https://evil.com/path">evil</a></html>'
