@@ -301,7 +301,7 @@ class TestSetupDriver:
         with patch.dict(sys.modules, mocks), \
              patch("shutil.which", side_effect=lambda c: "/found/chromium" if c == "chromium" else None):
             _setup_driver(headless=True, chromium_path="", chromedriver_path="/drv")
-        assert mock_options.binary_location == "chromium"
+        assert mock_options.binary_location == "/found/chromium"
 
     def test_no_chromium_found_binary_location_not_set(self):
         from commonhuman_core.browser_crawler import _setup_driver
@@ -332,4 +332,4 @@ class TestSetupDriver:
         with patch.dict(sys.modules, mocks), \
              patch("shutil.which", return_value="/found/chromedriver"):
             _setup_driver(headless=True, chromium_path="/c", chromedriver_path="")
-        mock_service_class.assert_called_with("chromedriver")
+        mock_service_class.assert_called_with("/found/chromedriver")
