@@ -164,18 +164,18 @@ def _setup_driver(headless: bool, chromium_path: str, chromedriver_path: str):
     if not chromium_path:
         import shutil
         for candidate in ("chromium", "chromium-browser", "google-chrome"):
-            if shutil.which(candidate):
-                chromium_path = candidate
+            found = shutil.which(candidate)
+            if found:
+                chromium_path = found
                 break
     if chromium_path:
         opts.binary_location = chromium_path
 
     if not chromedriver_path:
         import shutil
-        for candidate in ("chromedriver",):
-            if shutil.which(candidate):
-                chromedriver_path = candidate
-                break
+        found = shutil.which("chromedriver")
+        if found:
+            chromedriver_path = found
 
     svc    = Service(chromedriver_path) if chromedriver_path else Service()
     driver = webdriver.Chrome(service=svc, options=opts)
