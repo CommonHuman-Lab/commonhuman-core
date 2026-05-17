@@ -36,6 +36,7 @@ from commonhuman_core.passive import fetch_seed
 from commonhuman_core.auth import form_login, bearer_login
 from commonhuman_core.openapi import load_openapi, ApiEndpoint
 from commonhuman_core.browser_crawler import browser_crawl
+from commonhuman_core.dorker import dork
 ```
 
 ---
@@ -52,6 +53,7 @@ from commonhuman_core.browser_crawler import browser_crawl
 | `commonhuman_core.auth` | Form login, OAuth2 bearer, CSRF extraction — returns cookies + headers |
 | `commonhuman_core.openapi` | OpenAPI 2.x / 3.x spec parser — expands paths to scannable `ApiEndpoint` list |
 | `commonhuman_core.browser_crawler` | Headless Chromium BFS URL discovery for JS-rendered SPAs (optional: selenium) |
+| `commonhuman_core.dorker` | DuckDuckGo URL discovery — returns URLs with query parameters from a search query |
 
 ---
 
@@ -271,6 +273,26 @@ Requires the optional `selenium` dependency:
 ```bash
 pip install commonhuman-core[browser]
 ```
+
+---
+
+### `dorker`
+
+DuckDuckGo-based URL discovery. Fetches search results and returns URLs that carry query parameters — the candidates most likely to have injectable surfaces. No API key required.
+
+```python
+from commonhuman_core.dorker import dork
+
+# Returns deduplicated URLs with query params, in result-rank order
+urls = dork("site:example.com inurl:search")
+urls = dork("inurl:q= filetype:php", max_results=50)
+urls = dork("site:example.com", proxy="http://127.0.0.1:8080", timeout=30)
+
+for url in urls:
+    print(url)  # https://example.com/search?q=hello
+```
+
+`dork()` returns an empty list on any network or parse failure — safe to call without a try/except.
 
 ---
 
