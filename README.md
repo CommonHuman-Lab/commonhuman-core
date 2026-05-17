@@ -8,8 +8,9 @@
 
 ```bash
 pip install commonhuman-core
-pip install commonhuman-core[browser]   # + headless Chromium crawler (requires selenium)
-pip install commonhuman-core[openapi]   # + YAML OpenAPI/Swagger support (requires pyyaml)
+pip install commonhuman-core[browser]    # + headless Chromium crawler (requires selenium)
+pip install commonhuman-core[openapi]    # + YAML OpenAPI/Swagger support (requires pyyaml)
+pip install commonhuman-core[websocket]  # + WebSocket injection helpers (requires websocket-client)
 ```
 
 ---
@@ -34,9 +35,11 @@ from commonhuman_core.http import HttpClient
 from commonhuman_core.crawler import crawl, CrawlResult
 from commonhuman_core.passive import fetch_seed
 from commonhuman_core.auth import form_login, bearer_login
-from commonhuman_core.openapi import load_openapi, ApiEndpoint
+from commonhuman_core.openapi import load_openapi, discover_openapi, ApiEndpoint
 from commonhuman_core.browser_crawler import browser_crawl
-from commonhuman_core.dorker import dork
+from commonhuman_core.dorker import dork, DorkEngine
+from commonhuman_core.ws import ws_inject, discover_ws_urls, WsResult
+from commonhuman_core.source_map import fetch_source_maps, SourceMapResult
 ```
 
 ---
@@ -53,7 +56,9 @@ from commonhuman_core.dorker import dork
 | `commonhuman_core.auth` | Form login, OAuth2 bearer, CSRF extraction — returns cookies + headers |
 | `commonhuman_core.openapi` | OpenAPI 2.x / 3.x spec parser — expands paths to scannable `ApiEndpoint` list |
 | `commonhuman_core.browser_crawler` | Headless Chromium BFS URL discovery for JS-rendered SPAs (optional: selenium) |
-| `commonhuman_core.dorker` | DuckDuckGo URL discovery — returns URLs with query parameters from a search query |
+| `commonhuman_core.dorker` | Multi-engine URL discovery (DDG, Bing, Yahoo) — returns URLs with query parameters |
+| `commonhuman_core.ws` | WebSocket injection helpers — send payloads, collect frames, detect marker reflection (optional: websocket-client) |
+| `commonhuman_core.source_map` | JavaScript source-map fetcher — recovers original source files from `.js.map` links |
 
 ---
 
@@ -226,7 +231,11 @@ auth = bearer_login(
 Parse an OpenAPI 2.x (Swagger) or 3.x spec and expand every path into a list of ready-to-scan URLs. Path parameters like `{id}` are substituted with sensible placeholders (`1` for integers, a fixed UUID for UUID params).
 
 ```python
-from commonhuman_core.openapi import load_openapi
+from commonhuman_core.openapi import load_openapi, discover_openapi
+
+# Probe a target for a spec — returns the spec URL or None
+spec_url = discover_openapi("https://target.com")
+# Probes /openapi.json, /swagger.json, /api/openapi.json, ... (19 paths)
 
 # Accepts a file path, a URL, or a raw JSON/YAML string
 endpoints = load_openapi("https://target.com/openapi.json", base_url="https://target.com")
@@ -278,21 +287,86 @@ pip install commonhuman-core[browser]
 
 ### `dorker`
 
-DuckDuckGo-based URL discovery. Fetches search results and returns URLs that carry query parameters — the candidates most likely to have injectable surfaces. No API key required.
+Multi-engine URL discovery via DuckDuckGo, Bing, and Yahoo. Returns URLs that carry query parameters — the candidates most likely to have injectable surfaces. No API key required.
 
 ```python
-from commonhuman_core.dorker import dork
+from commonhuman_core.dorker import dork, DorkEngine
 
-# Returns deduplicated URLs with query params, in result-rank order
+# Default engine is DDG
 urls = dork("site:example.com inurl:search")
 urls = dork("inurl:q= filetype:php", max_results=50)
 urls = dork("site:example.com", proxy="http://127.0.0.1:8080", timeout=30)
+
+# Query all three engines and deduplicate
+urls = dork("site:example.com", engine=DorkEngine.ALL)
 
 for url in urls:
     print(url)  # https://example.com/search?q=hello
 ```
 
 `dork()` returns an empty list on any network or parse failure — safe to call without a try/except.
+
+---
+
+### `ws`
+
+WebSocket injection helpers — discover WebSocket endpoints in HTML/JS, send payloads, collect response frames, and detect marker reflection.
+
+```python
+from commonhuman_core.ws import ws_inject, discover_ws_urls, WsResult, WEBSOCKET_AVAILABLE
+
+# Discover WebSocket endpoints from page source
+ws_urls = discover_ws_urls(html, base_url="https://target.com")
+# → ["wss://target.com/ws/feed", "wss://chat.target.com/socket"]
+
+# Inject payloads and collect responses
+results: list[WsResult] = ws_inject(
+    url="wss://target.com/ws",
+    payloads=["<img src=x onerror=alert('xss')>"],
+    cookies="session=abc",
+    marker="StingXSS_marker",
+    timeout=10,
+)
+for r in results:
+    print(r.reflected, r.responses, r.error)
+```
+
+Requires the optional `websocket-client` dependency:
+
+```bash
+pip install commonhuman-core[websocket]
+```
+
+`WEBSOCKET_AVAILABLE` is `False` when the package is not installed; `ws_inject()` returns `[]` in that case, so no try/except needed at the call site.
+
+---
+
+### `source_map`
+
+Fetches JavaScript source maps and recovers original source files. Useful for passive recon — production bundles often leak full application source trees via `.js.map` files.
+
+```python
+from commonhuman_core.source_map import fetch_source_maps, SourceMapResult
+
+def fetcher(url: str) -> str:
+    return requests.get(url, timeout=10).text
+
+result: SourceMapResult = fetch_source_maps(
+    js_urls=["https://target.com/static/bundle.js"],
+    fetcher=fetcher,
+    base_url="https://target.com",
+    max_maps=10,
+)
+
+for path, source in result.sources.items():
+    print(path)      # src/components/App.jsx
+    print(source[:200])  # const App = () => ...
+
+# result.mapping maps each JS URL to the source paths it contained
+print(result.mapping["https://target.com/static/bundle.js"])
+```
+
+`fetch_source_maps` ignores noise paths (node_modules, webpack runtime, test files) automatically. Inline `data:` source maps are decoded without a network request.
 
 ---
 

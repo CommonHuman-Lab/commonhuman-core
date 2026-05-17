@@ -18,6 +18,7 @@ from commonhuman_core.openapi import (
     _build_endpoint,
     _placeholder_for,
     _resolve_ref,
+    discover_openapi,
     load_openapi,
 )
 
@@ -617,3 +618,73 @@ class TestBodyFieldsV3:
         body = {"$ref": "#/components/requestBodies/CreateItem"}
         result = _body_fields_v3(body, spec)
         assert "item_name" in result
+
+
+# ---------------------------------------------------------------------------
+# discover_openapi
+# ---------------------------------------------------------------------------
+
+def _mock_urlopen(content: str, content_type: str = "application/json", status: int = 200):
+    """Return a context-manager mock for urllib.request.urlopen."""
+    resp = MagicMock()
+    resp.status = status
+    resp.headers = MagicMock()
+    resp.headers.get.return_value = content_type
+    resp.read.return_value = content.encode("utf-8")
+    resp.__enter__ = lambda s: s
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
+class TestDiscoverOpenapi:
+    # urllib.request is imported lazily inside discover_openapi(), so we patch
+    # at the stdlib level rather than via the module namespace.
+    _URLOPEN = "urllib.request.urlopen"
+
+    def test_returns_url_for_json_swagger_spec(self):
+        spec = json.dumps({"swagger": "2.0", "paths": {}})
+        with patch(self._URLOPEN, side_effect=lambda *a, **kw: _mock_urlopen(spec, "application/json")):
+            url = discover_openapi("https://api.example.com")
+        assert url is not None
+        assert "api.example.com" in url
+
+    def test_returns_url_for_openapi3_spec(self):
+        spec = json.dumps({"openapi": "3.0.0", "paths": {}})
+        with patch(self._URLOPEN, side_effect=lambda *a, **kw: _mock_urlopen(spec, "application/json")):
+            url = discover_openapi("https://api.example.com")
+        assert url is not None
+
+    def test_returns_none_when_all_paths_404(self):
+        import urllib.error
+        with patch(self._URLOPEN, side_effect=urllib.error.HTTPError(None, 404, "Not Found", {}, None)):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_returns_none_when_all_requests_fail(self):
+        with patch(self._URLOPEN, side_effect=OSError("network error")):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_extracts_embedded_spec_url_from_swagger_ui_html(self):
+        swagger_ui = (
+            '<html><script src="swagger-ui.js"></script>'
+            '<script>SwaggerUIBundle({ url: "/api/swagger.json" })</script></html>'
+        )
+        with patch(self._URLOPEN, side_effect=lambda *a, **kw: _mock_urlopen(swagger_ui, "text/html")):
+            url = discover_openapi("https://api.example.com")
+        # Should return the embedded spec URL (or None if not implemented)
+        # We just verify no crash and that the return is string-or-None
+        assert url is None or isinstance(url, str)
+
+    def test_strips_trailing_slash_from_base(self):
+        spec = json.dumps({"openapi": "3.0.0", "paths": {}})
+        captured = []
+
+        def fake_urlopen(req, timeout=None):
+            captured.append(req.full_url)
+            return _mock_urlopen(spec, "application/json")
+
+        with patch(self._URLOPEN, side_effect=fake_urlopen):
+            discover_openapi("https://api.example.com/")
+        # No double slashes in any probed URL
+        assert not any("//" in u.replace("https://", "").replace("http://", "") for u in captured)

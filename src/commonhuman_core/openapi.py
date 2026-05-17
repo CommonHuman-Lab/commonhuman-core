@@ -288,3 +288,108 @@ def _placeholder_for(param_name: str) -> str:
     if _RE_UUID_HINT.search(param_name):
         return "00000000-0000-4000-a000-000000000000"
     return "1"
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery
+# ---------------------------------------------------------------------------
+
+# Canonical paths where OpenAPI specs are commonly served.
+_SPEC_PATHS: List[str] = [
+    "/openapi.json",
+    "/openapi.yaml",
+    "/swagger.json",
+    "/swagger.yaml",
+    "/api-docs",
+    "/api-docs.json",
+    "/v1/openapi.json",
+    "/v2/openapi.json",
+    "/v3/openapi.json",
+    "/api/openapi.json",
+    "/api/swagger.json",
+    "/api/v1/openapi.json",
+    "/api/v2/openapi.json",
+    "/docs/openapi.json",
+    "/docs/swagger.json",
+    # Swagger UI — the HTML page embeds the spec URL in the page source
+    "/swagger-ui.html",
+    "/swagger-ui/",
+    "/api/swagger-ui.html",
+    "/docs",
+    "/redoc",
+]
+
+_SPEC_URL_RE = re.compile(
+    r"""["']((?:https?://[^"']+)?/[^"']*(?:openapi|swagger)[^"']*\.(?:json|yaml))["']""",
+    re.IGNORECASE,
+)
+
+
+def discover_openapi(base_url: str, timeout: int = 10) -> Optional[str]:
+    """Probe common paths on *base_url* to find an OpenAPI/Swagger spec.
+
+    Probes each path in ``_SPEC_PATHS``.  If the response looks like a valid
+    spec (JSON ``swagger``/``openapi`` key, or YAML equivalent), returns the
+    full spec URL.  For Swagger UI HTML pages, the embedded spec URL is
+    extracted from the page source.
+
+    Args:
+        base_url: Root URL of the target (scheme + host, e.g.
+                  ``https://api.example.com``).
+        timeout:  Per-request timeout in seconds (default 10).
+
+    Returns:
+        The URL of the discovered spec, or ``None`` if none was found.
+    """
+    import urllib.request
+
+    origin = base_url.rstrip("/")
+
+    for path in _SPEC_PATHS:
+        url = origin + path
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "commonhuman-core/openapi-discover"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                if resp.status >= 400:
+                    continue
+                content_type = resp.headers.get("Content-Type", "")
+                raw = resp.read(65536).decode("utf-8", errors="replace")
+        except Exception:
+            continue
+
+        # Direct JSON spec
+        if "json" in content_type or raw.lstrip().startswith("{"):
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict) and (
+                    "swagger" in data or "openapi" in data or "paths" in data
+                ):
+                    logger.info("openapi: discovered spec at %s", url)
+                    return url
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # YAML spec
+        if "yaml" in content_type or path.endswith(".yaml"):
+            try:
+                import yaml  # type: ignore[import-untyped]
+                data = yaml.safe_load(raw)
+                if isinstance(data, dict) and (
+                    "swagger" in data or "openapi" in data or "paths" in data
+                ):
+                    logger.info("openapi: discovered YAML spec at %s", url)
+                    return url
+            except Exception:
+                pass
+
+        # HTML page (Swagger UI / Redoc) — extract embedded spec URL
+        if "html" in content_type or path.endswith((".html", "/")):
+            m = _SPEC_URL_RE.search(raw)
+            if m:
+                embedded = m.group(1)
+                spec_url = embedded if embedded.startswith("http") else origin + embedded
+                logger.info("openapi: found embedded spec URL %s in %s", spec_url, url)
+                return spec_url
+
+    logger.debug("openapi: no spec discovered on %s", origin)
+    return None

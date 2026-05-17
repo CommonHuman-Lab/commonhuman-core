@@ -144,6 +144,13 @@ def crawl(
 
                 for form in forms:
                     result.form_targets.append(form)
+                    # Enqueue the form action URL for a GET visit so we discover
+                    # what's at that endpoint (even for POST forms like subscribe pages).
+                    if depth < max_depth:
+                        action_norm = _normalise(form.action)
+                        if action_norm not in visited and not _is_excluded(action_norm):
+                            if not same_origin or injector.same_origin(action_norm, start_url):
+                                queue.append((action_norm, depth + 1))
 
                 if depth < max_depth:
                     for link in links:
@@ -178,7 +185,8 @@ def _fetch_page(
     html = resp.text
     # Use the final URL after redirects as the base so relative links and
     # form actions resolve correctly (critical for 301 /path → /path/ redirects).
-    effective_url = resp.url if resp.url else url
+    resp_url = getattr(resp, "url", None)
+    effective_url = resp_url if isinstance(resp_url, str) and resp_url else url
     return html, _extract_links(html, effective_url), _extract_forms(html, effective_url)
 
 
@@ -199,16 +207,29 @@ class _LinkParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
         tag_lower = tag.lower()
+        attr_dict = {k.lower(): v for k, v in attrs if v is not None}
+
         if tag_lower == "code":
             self._in_code = True
             return
-        if tag_lower != "a":
-            return
-        attr_dict = {k.lower(): v for k, v in attrs if v is not None}
-        href = attr_dict.get("href", "").strip()
-        if not href or href.startswith(("javascript:", "mailto:", "#")):
-            return
-        self._add(href)
+
+        # Standard anchor links
+        if tag_lower == "a":
+            href = attr_dict.get("href", "").strip()
+            if href and not href.startswith(("javascript:", "mailto:", "#")):
+                self._add(href)
+
+        # <button formaction="..."> — submits to a different URL than its parent form
+        if tag_lower == "button":
+            fa = attr_dict.get("formaction", "").strip()
+            if fa and not fa.startswith(("javascript:", "mailto:", "#")):
+                self._add(fa)
+
+        # data-href / data-url / data-link / data-action on any element
+        for data_attr in ("data-href", "data-url", "data-link", "data-action"):
+            val = attr_dict.get(data_attr, "").strip()
+            if val and not val.startswith(("javascript:", "mailto:", "#", "{")):
+                self._add(val)
 
     def handle_endtag(self, tag: str) -> None:
         if tag.lower() == "code":

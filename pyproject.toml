@@ -32,8 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-browser = ["selenium>=4.0"]
-openapi = ["pyyaml>=6.0"]
+browser   = ["selenium>=4.0"]
+openapi   = ["pyyaml>=6.0"]
+websocket = ["websocket-client>=1.0"]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
