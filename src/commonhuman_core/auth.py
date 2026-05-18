@@ -17,7 +17,7 @@ import logging
 import urllib.parse as up
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .http.client import HttpClient
 
@@ -145,6 +145,50 @@ def bearer_login(
     except Exception as exc:
         logger.warning("bearer_login: %s failed: %s", token_url, exc)
     return AuthResult()
+
+
+def http_auth(auth_type: str, cred: str) -> Any:
+    """Return a requests-compatible auth object for Basic, Digest, or NTLM auth.
+
+    Args:
+        auth_type: ``"basic"``, ``"digest"``, or ``"ntlm"``.
+        cred:      Credentials in ``"username:password"`` format. The password
+                   may itself contain colons — only the first colon is used as
+                   the delimiter.
+
+    Returns:
+        A ``requests.auth.HTTPBasicAuth``, ``requests.auth.HTTPDigestAuth``,
+        or ``requests_ntlm.HttpNtlmAuth`` instance ready to be passed to
+        ``HttpClient(auth=...)``.
+
+    Raises:
+        ValueError:  Invalid *auth_type* or malformed *cred*.
+        ImportError: ``auth_type="ntlm"`` requested but ``requests-ntlm`` is
+                     not installed (``pip install commonhuman-core[ntlm]``).
+    """
+    if not cred or ":" not in cred:
+        raise ValueError(
+            f"auth_cred must be in 'username:password' format, got {cred!r}"
+        )
+    user, _, password = cred.partition(":")
+
+    if auth_type == "basic":
+        from requests.auth import HTTPBasicAuth
+        return HTTPBasicAuth(user, password)
+    if auth_type == "digest":
+        from requests.auth import HTTPDigestAuth
+        return HTTPDigestAuth(user, password)
+    if auth_type == "ntlm":
+        try:
+            from requests_ntlm import HttpNtlmAuth  # type: ignore[import]
+        except ImportError as exc:
+            raise ImportError(
+                "NTLM auth requires requests-ntlm: pip install commonhuman-core[ntlm]"
+            ) from exc
+        return HttpNtlmAuth(user, password)
+    raise ValueError(
+        f"Unknown auth_type {auth_type!r}. Supported values: basic, digest, ntlm"
+    )
 
 
 def extract_csrf(html: str) -> Optional[str]:

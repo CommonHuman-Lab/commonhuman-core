@@ -11,6 +11,7 @@ pip install commonhuman-core
 pip install commonhuman-core[browser]    # + headless Chromium crawler (requires selenium)
 pip install commonhuman-core[openapi]    # + YAML OpenAPI/Swagger support (requires pyyaml)
 pip install commonhuman-core[websocket]  # + WebSocket injection helpers (requires websocket-client)
+pip install commonhuman-core[ntlm]       # + NTLM HTTP authentication (requires requests-ntlm)
 ```
 
 ---
@@ -53,7 +54,7 @@ from commonhuman_core.source_map import fetch_source_maps, SourceMapResult
 | `commonhuman_core.http.parse_post_data` | Parse urlencoded or JSON POST bodies into a flat dict |
 | `commonhuman_core.crawler` | BFS web crawler — link + form discovery, page source storage |
 | `commonhuman_core.passive` | Passive recon helpers — `fetch_seed()` |
-| `commonhuman_core.auth` | Form login, OAuth2 bearer, CSRF extraction — returns cookies + headers |
+| `commonhuman_core.auth` | Form login, OAuth2 bearer, HTTP Basic/Digest/NTLM — returns auth objects or cookies + headers |
 | `commonhuman_core.openapi` | OpenAPI 2.x / 3.x spec parser — expands paths to scannable `ApiEndpoint` list |
 | `commonhuman_core.browser_crawler` | Headless Chromium BFS URL discovery for JS-rendered SPAs (optional: selenium) |
 | `commonhuman_core.dorker` | Multi-engine URL discovery (DDG, Bing, Yahoo) — returns URLs with query parameters |
@@ -78,6 +79,7 @@ client = HttpClient(
     cookies="session=abc; token=xyz",
     verify_ssl=False,
     delay=0.5,          # seconds between requests
+    auth=None,          # requests auth object — e.g. from http_auth()
 )
 ```
 
@@ -198,10 +200,10 @@ Useful for a single passive check before starting an active scan — confirms th
 
 ### `auth`
 
-Authenticate against a login form or OAuth2 token endpoint before scanning. Returns cookies and headers that can be forwarded to any `HttpClient`.
+Authenticate against a login form, OAuth2 token endpoint, or via HTTP protocol-level auth. Returns either a `requests`-compatible auth object or cookies and headers to forward to any `HttpClient`.
 
 ```python
-from commonhuman_core.auth import form_login, bearer_login
+from commonhuman_core.auth import form_login, bearer_login, http_auth
 
 # Form-based login — GET page, extract CSRF, POST credentials
 auth = form_login(
@@ -220,9 +222,18 @@ auth = bearer_login(
     client_id="my-client",
     client_secret="my-secret",
 )
+
+# HTTP protocol-level auth — returns a requests auth object for HttpClient(auth=...)
+basic_auth  = http_auth("basic",  "admin:secret")
+digest_auth = http_auth("digest", "user:pass")
+ntlm_auth   = http_auth("ntlm",   "DOMAIN\\user:pass")  # requires commonhuman-core[ntlm]
+
+client = HttpClient(auth=basic_auth)
 ```
 
-`auth.is_empty()` returns `True` when login produced no usable credentials (useful for early-exit checks).
+`auth.is_empty()` returns `True` when form/bearer login produced no usable credentials.
+
+`http_auth()` raises `ValueError` for unknown auth types or malformed credentials, and `ImportError` when NTLM is requested without `requests-ntlm` installed.
 
 ---
 

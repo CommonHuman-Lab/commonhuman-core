@@ -15,6 +15,7 @@ from commonhuman_core.auth import (
     bearer_login,
     extract_csrf,
     form_login,
+    http_auth,
 )
 from commonhuman_core.http import HttpClient
 
@@ -346,6 +347,59 @@ class TestExtractCsrf:
     def test_empty_value_returns_none(self):
         html = '<form><input name="csrf_token" value=""></form>'
         assert extract_csrf(html) is None
+
+
+# ---------------------------------------------------------------------------
+# http_auth
+# ---------------------------------------------------------------------------
+
+class TestHttpAuth:
+    def test_basic_returns_http_basic_auth(self):
+        from requests.auth import HTTPBasicAuth
+        result = http_auth("basic", "alice:s3cr3t")
+        assert isinstance(result, HTTPBasicAuth)
+        assert result.username == "alice"
+        assert result.password == "s3cr3t"
+
+    def test_basic_password_with_colons(self):
+        from requests.auth import HTTPBasicAuth
+        result = http_auth("basic", "alice:pa:ss:word")
+        assert isinstance(result, HTTPBasicAuth)
+        assert result.username == "alice"
+        assert result.password == "pa:ss:word"
+
+    def test_digest_returns_http_digest_auth(self):
+        from requests.auth import HTTPDigestAuth
+        result = http_auth("digest", "bob:hunter2")
+        assert isinstance(result, HTTPDigestAuth)
+        assert result.username == "bob"
+        assert result.password == "hunter2"
+
+    def test_ntlm_returns_ntlm_auth_when_available(self, monkeypatch):
+        import sys
+        mock_mod = type(sys)("requests_ntlm")
+        mock_mod.HttpNtlmAuth = lambda u, p: (u, p)
+        monkeypatch.setitem(sys.modules, "requests_ntlm", mock_mod)
+        result = http_auth("ntlm", "DOMAIN\\user:pass")
+        assert result == ("DOMAIN\\user", "pass")
+
+    def test_ntlm_raises_import_error_when_unavailable(self, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, "requests_ntlm", None)
+        with pytest.raises(ImportError, match="requests-ntlm"):
+            http_auth("ntlm", "user:pass")
+
+    def test_unknown_auth_type_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown auth_type"):
+            http_auth("oauth", "user:pass")
+
+    def test_empty_cred_raises_value_error(self):
+        with pytest.raises(ValueError, match="username:password"):
+            http_auth("basic", "")
+
+    def test_cred_without_colon_raises_value_error(self):
+        with pytest.raises(ValueError, match="username:password"):
+            http_auth("basic", "usernopassword")
 
 
 # ---------------------------------------------------------------------------

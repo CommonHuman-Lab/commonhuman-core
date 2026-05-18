@@ -65,6 +65,7 @@ class HttpClient:
         cookies:    Optional[str] = None,
         verify_ssl: bool = False,
         delay:      float = 0.0,
+        auth:       Any = None,
     ) -> None:
         self.timeout       = timeout
         self.request_count = 0
@@ -72,6 +73,9 @@ class HttpClient:
 
         self._session = requests.Session()
         self._session.verify = verify_ssl
+
+        if auth is not None:
+            self._session.auth = auth
 
         retry = Retry(
             total=2,

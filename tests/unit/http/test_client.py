@@ -68,6 +68,16 @@ class TestSessionSetup:
         c = HttpClient(delay=-1.0)
         assert c.delay == 0.0
 
+    def test_auth_set_on_session_when_provided(self):
+        from requests.auth import HTTPBasicAuth
+        auth = HTTPBasicAuth("user", "pass")
+        c = HttpClient(timeout=5, auth=auth)
+        assert c._session.auth is auth
+
+    def test_auth_not_set_when_none(self):
+        c = HttpClient(timeout=5)
+        assert c._session.auth is None
+
 
 # ---------------------------------------------------------------------------
 # request_count
