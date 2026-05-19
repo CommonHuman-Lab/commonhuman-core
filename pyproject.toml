@@ -36,6 +36,8 @@ browser   = ["selenium>=4.0"]
 openapi   = ["pyyaml>=6.0"]
 websocket = ["websocket-client>=1.0"]
 ntlm      = ["requests-ntlm>=1.2"]
+ssh       = ["paramiko>=3.0"]
+smb       = ["impacket>=0.11.0"]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
