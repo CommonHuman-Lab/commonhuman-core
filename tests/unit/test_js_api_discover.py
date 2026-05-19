@@ -475,6 +475,52 @@ class TestJsApiDiscover:
         assert any("/rest/from-static" in u for u in found)
         assert any("/rest/indirect/suffix" in u for u in found)
 
+    def test_deduplication_across_bundles_method_templates(self):
+        """Branch 84->82: same key from _extract_method_templates in two bundles."""
+        js = 'get(`${host}/rest/shared-endpoint`)'
+        html = (
+            '<script src="/bundle1.js"></script>'
+            '<script src="/bundle2.js"></script>'
+        )
+
+        sess = MagicMock(spec=requests.Session)
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.ok = True
+            if url.endswith("/"):
+                resp.text = html
+            else:
+                resp.text = js
+            return resp
+        sess.get.side_effect = _get
+
+        results = js_api_discover("http://example.com/", session=sess)
+        urls = [r[1] for r in results]
+        assert urls.count("http://example.com/rest/shared-endpoint") <= 1
+
+    def test_deduplication_across_bundles_indirect_concat(self):
+        """Branch 96->94: same key from _extract_indirect_concat in two bundles."""
+        js = 'base = "/rest/user";\npost(base + "/login", body)'
+        html = (
+            '<script src="/bundle1.js"></script>'
+            '<script src="/bundle2.js"></script>'
+        )
+
+        sess = MagicMock(spec=requests.Session)
+        def _get(url, **kwargs):
+            resp = MagicMock()
+            resp.ok = True
+            if url.endswith("/"):
+                resp.text = html
+            else:
+                resp.text = js
+            return resp
+        sess.get.side_effect = _get
+
+        results = js_api_discover("http://example.com/", session=sess)
+        urls = [r[1] for r in results if "/rest/user/login" in r[1]]
+        assert len(urls) <= 1
+
     def test_max_bundles_limits_fetched_bundles(self):
         # 30 script tags available; max_bundles=5 should cap total bundle fetches well below 30.
         # Each bundle is fetched twice (once in _collect_bundle_urls for chunk scanning,

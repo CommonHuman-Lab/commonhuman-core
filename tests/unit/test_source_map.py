@@ -158,6 +158,11 @@ class TestFetchMap:
         result = _fetch_map("data:application/json;base64,NOTVALID!!!!", "", lambda u: "")
         assert result is None
 
+    def test_data_uri_without_base64_marker_returns_none(self):
+        """Line 148: _DATA_URI_RE doesn't match → return None."""
+        result = _fetch_map("data:application/json;charset=utf-8,{}", "", lambda u: "")
+        assert result is None
+
     def test_returns_none_for_empty_response(self):
         result = _fetch_map("https://example.com/map.js.map", "", lambda u: "")
         assert result is None
@@ -265,3 +270,14 @@ class TestFetchSourceMaps:
         result = fetch_source_maps([js_url], fetcher)
         assert js_url in result.mapping
         assert "src/a.js" in result.mapping[js_url]
+
+    def test_map_fetch_failure_skips_js_file(self):
+        """Line 109: _fetch_map returns None → continue."""
+        js_url = "https://cdn.example.com/bundle.js"
+        # JS has a map comment, but the map URL returns empty string → _fetch_map returns None
+        fetcher = self._make_fetcher({
+            js_url: "var x=1;\n//# sourceMappingURL=bundle.js.map",
+            "https://cdn.example.com/bundle.js.map": "",  # empty → _fetch_map returns None
+        })
+        result = fetch_source_maps([js_url], fetcher)
+        assert result.sources == {}

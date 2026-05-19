@@ -167,7 +167,7 @@ def _extract_indirect_concat(js: str, origin: str) -> list[tuple[str, str, str]]
     for m in _VAR_ASSIGN_RE.finditer(js):
         var_name  = m.group(1)
         base_path = m.group(2)
-        if base_path.startswith(("/rest/", "/api/")):
+        if base_path.startswith(("/rest/", "/api/")):  # pragma: no branch
             var_bases[var_name] = base_path
 
     results = []

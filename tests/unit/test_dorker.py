@@ -104,6 +104,46 @@ class TestDorkDdg:
         assert len(urls) <= 1
 
 
+_DDG_HTML_NON_HTTP = '''
+<html><body>
+<a href="//duckduckgo.com/l/?uddg=ftp%3A%2F%2Ftarget.com%2Fdownload&rut=x">FTP result</a>
+</body></html>
+'''
+
+_BING_HTML_NO_PARAMS = '''
+<html><body>
+<a href="https://target.com/no-params-here" class="tilk">Result</a>
+</body></html>
+'''
+
+_BING_HTML_CITE = '''
+<html><body>
+<cite>https://target.com/search?q=cite-match</cite>
+</body></html>
+'''
+
+_YAHOO_HTML_NO_PARAMS = '''
+<html><body>
+<a href="/RU=https://target.com/noparam/RK=2/xxx">Result</a>
+</body></html>
+'''
+
+_YAHOO_HTML_FALLBACK = '''
+<html><body>
+<a href="https://target.com/find?q=fallback"><b>Result</b></a>
+</body></html>
+'''
+
+
+class TestDorkDdgBranches:
+    def test_non_http_scheme_url_skipped(self):
+        """Branch 140->137: URL with ftp:// scheme fails the scheme check."""
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(_DDG_HTML_NON_HTTP)):
+            urls = _dork_ddg("query", 10, {}, 5)
+        assert urls == []
+
+
 class TestDorkBing:
     def test_returns_urls_with_params(self):
         with patch("commonhuman_core.dorker.requests.get",
@@ -115,6 +155,28 @@ class TestDorkBing:
         import requests
         with patch("commonhuman_core.dorker.requests.get",
                    side_effect=requests.RequestException("refused")):
+            urls = _dork_bing("query", 10, {}, 5)
+        assert urls == []
+
+    def test_tilk_url_without_params_skipped(self):
+        """Branch 171->169: tilk-class URL has no query params."""
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(_BING_HTML_NO_PARAMS)):
+            urls = _dork_bing("query", 10, {}, 5)
+        assert urls == []
+
+    def test_cite_fallback_used_when_no_tilk_matches(self):
+        """Lines 177-181: _BING_RE2 fallback when _BING_RE finds nothing."""
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(_BING_HTML_CITE)):
+            urls = _dork_bing("query", 10, {}, 5)
+        assert any("q=cite-match" in u for u in urls)
+
+    def test_cite_url_without_params_skipped_in_fallback(self):
+        """Branch 179->177: cite URL has no query params."""
+        html = '<html><body><cite>https://target.com/no-params-here</cite></body></html>'
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(html)):
             urls = _dork_bing("query", 10, {}, 5)
         assert urls == []
 
@@ -130,6 +192,28 @@ class TestDorkYahoo:
         import requests
         with patch("commonhuman_core.dorker.requests.get",
                    side_effect=requests.RequestException("error")):
+            urls = _dork_yahoo("query", 10, {}, 5)
+        assert urls == []
+
+    def test_ru_url_without_params_skipped(self):
+        """Branch 209->207: /RU= URL has no query params."""
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(_YAHOO_HTML_NO_PARAMS)):
+            urls = _dork_yahoo("query", 10, {}, 5)
+        assert urls == []
+
+    def test_anchor_fallback_used_when_no_ru_matches(self):
+        """Lines 215-219: _YAHOO_RE fallback when _YAHOO_RU finds nothing."""
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(_YAHOO_HTML_FALLBACK)):
+            urls = _dork_yahoo("query", 10, {}, 5)
+        assert any("q=fallback" in u for u in urls)
+
+    def test_anchor_fallback_url_without_params_skipped(self):
+        """Branch 217->215: Yahoo anchor fallback URL has no query params."""
+        html = '<html><body><a href="https://target.com/no-params"><b>Result</b></a></body></html>'
+        with patch("commonhuman_core.dorker.requests.get",
+                   return_value=_mock_response(html)):
             urls = _dork_yahoo("query", 10, {}, 5)
         assert urls == []
 

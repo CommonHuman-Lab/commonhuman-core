@@ -688,3 +688,120 @@ class TestDiscoverOpenapi:
             discover_openapi("https://api.example.com/")
         # No double slashes in any probed URL
         assert not any("//" in u.replace("https://", "").replace("http://", "") for u in captured)
+
+    def test_4xx_status_continues_to_next_path(self):
+        """Line 354: resp.status >= 400 → continue without returning."""
+        call_count = [0]
+
+        def fake_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return _mock_urlopen("{}", "application/json", status=403)
+            raise OSError("no more")
+
+        with patch(self._URLOPEN, side_effect=fake_urlopen):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_json_non_spec_dict_continues(self):
+        """Branch 364->373: valid JSON dict but not a swagger/openapi spec."""
+        non_spec = json.dumps({"error": "not found", "code": 404})
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.endswith(".json"):
+                return _mock_urlopen(non_spec, "application/json")
+            raise OSError("skip")
+
+        with patch(self._URLOPEN, side_effect=fake_urlopen):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_invalid_json_continues(self):
+        """Lines 369-370: json.loads raises → except handler runs."""
+        bad_json = "{this is not valid json"
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.endswith(".json"):
+                return _mock_urlopen(bad_json, "application/json")
+            raise OSError("skip")
+
+        with patch(self._URLOPEN, side_effect=fake_urlopen):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_yaml_spec_discovered(self):
+        """Lines 374-381: YAML content-type with a valid swagger spec returns URL."""
+        yaml_spec = "swagger: '2.0'\npaths: {}"
+        mock_yaml = MagicMock()
+        mock_yaml.safe_load.return_value = {"swagger": "2.0", "paths": {}}
+
+        def fake_urlopen(req, timeout=None):
+            if ".yaml" in req.full_url:
+                return _mock_urlopen(yaml_spec, "application/yaml")
+            raise OSError("skip")
+
+        import sys
+        with patch(self._URLOPEN, side_effect=fake_urlopen), \
+             patch.dict(sys.modules, {"yaml": mock_yaml}):
+            url = discover_openapi("https://api.example.com")
+        assert url is not None and ".yaml" in url
+
+    def test_yaml_parse_error_continues(self):
+        """Lines 382-383: yaml.safe_load raises → except fires."""
+        yaml_spec = "swagger: '2.0'\npaths: {}"
+        mock_yaml = MagicMock()
+        mock_yaml.safe_load.side_effect = Exception("yaml parse error")
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.endswith(".yaml"):
+                return _mock_urlopen(yaml_spec, "application/yaml")
+            raise OSError("skip")
+
+        import sys
+        with patch(self._URLOPEN, side_effect=fake_urlopen), \
+             patch.dict(sys.modules, {"yaml": mock_yaml}):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_yaml_non_spec_dict_continues(self):
+        """Branch 377->386: yaml parses OK but data has no swagger/openapi/paths key."""
+        yaml_spec = "error: not a spec"
+        mock_yaml = MagicMock()
+        mock_yaml.safe_load.return_value = {"error": "not a spec"}
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.endswith(".yaml"):
+                return _mock_urlopen(yaml_spec, "application/yaml")
+            raise OSError("skip")
+
+        import sys
+        with patch(self._URLOPEN, side_effect=fake_urlopen), \
+             patch.dict(sys.modules, {"yaml": mock_yaml}):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_html_without_embedded_spec_url_continues(self):
+        """Branch 388->348: HTML page with no embedded spec URL pattern."""
+        html_no_spec = "<html><body><h1>API Docs</h1></body></html>"
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.endswith(("swagger-ui.html", "swagger-ui/", "docs", "redoc")):
+                return _mock_urlopen(html_no_spec, "text/html")
+            raise OSError("skip")
+
+        with patch(self._URLOPEN, side_effect=fake_urlopen):
+            url = discover_openapi("https://api.example.com")
+        assert url is None
+
+    def test_non_json_yaml_html_content_continues(self):
+        """Branch 386->348: content type is not json/yaml/html and path has no matching suffix."""
+        xml_content = "<error><message>not found</message></error>"
+
+        def fake_urlopen(req, timeout=None):
+            if req.full_url.endswith("/api-docs"):
+                return _mock_urlopen(xml_content, "application/xml")
+            raise OSError("skip")
+
+        with patch(self._URLOPEN, side_effect=fake_urlopen):
+            url = discover_openapi("https://api.example.com")
+        assert url is None

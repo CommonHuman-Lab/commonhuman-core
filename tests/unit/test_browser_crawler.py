@@ -32,7 +32,8 @@ def _make_driver(link_pages: list[list[str]] | None = None) -> MagicMock:
 def _crawl_with_driver(driver, **kwargs):
     """Run browser_crawl with _setup_driver patched to return driver."""
     with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-         patch("commonhuman_core.browser_crawler.time.sleep"):
+         patch("commonhuman_core.browser_crawler.time.sleep"), \
+         patch("commonhuman_core.browser_crawler._wait_for_ready"):
         return browser_crawl(**kwargs)
 
 
@@ -138,7 +139,8 @@ class TestBrowserCrawlBasic:
         driver = MagicMock()
         driver.execute_script.side_effect = RuntimeError("crash")
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl("https://example.com/")
         driver.quit.assert_called_once()
 
@@ -148,7 +150,8 @@ class TestBrowserCrawlBasic:
         driver.get.side_effect = [None, RuntimeError("timeout")]
         driver.execute_script.return_value = ["https://example.com/page2"]
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl(
                 "https://example.com/",
                 max_depth=1,
@@ -162,7 +165,8 @@ class TestBrowserCrawlBasic:
         driver.get.return_value = None
         driver.execute_script.side_effect = RuntimeError("script error")
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl("https://example.com/", max_depth=1)
         assert "https://example.com/" in result
 
@@ -172,7 +176,8 @@ class TestBrowserCrawlBasic:
         driver.get.return_value = None
         driver.execute_script.return_value = 42  # int is not iterable → TypeError in for-loop
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl("https://example.com/", max_depth=1)
         driver.quit.assert_called_once()
 
@@ -182,7 +187,8 @@ class TestBrowserCrawlBasic:
         driver.execute_script.return_value = []
         driver.quit.side_effect = RuntimeError("quit failed")
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl("https://example.com/", max_depth=0)
         # No exception raised — the finally swallowed it
         assert "https://example.com/" in result
@@ -196,7 +202,8 @@ class TestBrowserCrawlBasic:
             [],                              # depth=1 → page3 (links not collected at max_depth)
         ]
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl("https://example.com/", max_depth=2, max_pages=10)
         # page3 visited once, not twice
         assert result.count("https://example.com/page3") == 1
@@ -225,7 +232,8 @@ class TestBrowserCrawlCookies:
         driver.add_cookie.side_effect = RuntimeError("cookie error")
         driver.execute_script.return_value = []
         with patch("commonhuman_core.browser_crawler._setup_driver", return_value=driver), \
-             patch("commonhuman_core.browser_crawler.time.sleep"):
+             patch("commonhuman_core.browser_crawler.time.sleep"), \
+             patch("commonhuman_core.browser_crawler._wait_for_ready"):
             result = browser_crawl(
                 "https://example.com/", cookies="session=abc"
             )
@@ -252,6 +260,53 @@ class TestBrowserCrawlCookies:
 # ---------------------------------------------------------------------------
 # _setup_driver — tested by mocking selenium at sys.modules level
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# _wait_for_ready — tested directly with mocked driver and time
+# ---------------------------------------------------------------------------
+
+class TestWaitForReady:
+    def test_completes_immediately_when_ready(self):
+        from commonhuman_core.browser_crawler import _wait_for_ready
+        driver = MagicMock()
+        driver.execute_script.return_value = "complete"
+        with patch("commonhuman_core.browser_crawler.time.monotonic", return_value=1000.0), \
+             patch("commonhuman_core.browser_crawler.time.sleep"):
+            _wait_for_ready(driver, timeout_s=5.0)
+        driver.execute_script.assert_called_once_with("return document.readyState")
+
+    def test_polls_until_ready(self):
+        from commonhuman_core.browser_crawler import _wait_for_ready
+        driver = MagicMock()
+        driver.execute_script.side_effect = ["loading", "loading", "complete"]
+        monotonic_values = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+        with patch("commonhuman_core.browser_crawler.time.monotonic",
+                   side_effect=monotonic_values), \
+             patch("commonhuman_core.browser_crawler.time.sleep"):
+            _wait_for_ready(driver, timeout_s=5.0)
+        assert driver.execute_script.call_count == 3
+
+    def test_times_out_when_never_ready(self):
+        from commonhuman_core.browser_crawler import _wait_for_ready
+        driver = MagicMock()
+        driver.execute_script.return_value = "loading"
+        monotonic_values = [0.0, 0.0, 10.0, 10.0]
+        with patch("commonhuman_core.browser_crawler.time.monotonic",
+                   side_effect=monotonic_values), \
+             patch("commonhuman_core.browser_crawler.time.sleep"):
+            _wait_for_ready(driver, timeout_s=1.0)
+
+    def test_execute_script_exception_is_swallowed(self):
+        from commonhuman_core.browser_crawler import _wait_for_ready
+        driver = MagicMock()
+        driver.execute_script.side_effect = [RuntimeError("stale element"), "complete"]
+        monotonic_values = [0.0, 0.1, 0.2, 0.3]
+        with patch("commonhuman_core.browser_crawler.time.monotonic",
+                   side_effect=monotonic_values), \
+             patch("commonhuman_core.browser_crawler.time.sleep"):
+            _wait_for_ready(driver, timeout_s=5.0)
+        assert driver.execute_script.call_count == 2
+
 
 class TestSetupDriver:
     def _make_selenium_mocks(self):

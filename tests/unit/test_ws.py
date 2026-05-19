@@ -61,6 +61,11 @@ class TestResolveWs:
     def test_non_ws_non_slash_returns_empty(self):
         assert _resolve_ws("some-text", "") == ""
 
+    def test_urlparse_exception_returns_empty(self):
+        with patch("urllib.parse.urlparse", side_effect=ValueError("bad")):
+            result = _resolve_ws("/ws/chat", "https://example.com")
+        assert result == ""
+
 
 # ---------------------------------------------------------------------------
 # discover_ws_urls
@@ -162,6 +167,38 @@ class TestWsInject:
 
         assert results[0].error == "refused"
         assert results[0].reflected is False
+
+    @pytest.mark.skipif(not WEBSOCKET_AVAILABLE, reason="websocket-client not installed")
+    def test_records_error_on_oserror(self):
+        with patch(
+            "commonhuman_core.ws.websocket.create_connection",
+            side_effect=OSError("connection refused"),
+        ):
+            results = ws_inject("wss://example.com/ws", ["p"], timeout=1)
+
+        assert results[0].error == "connection refused"
+
+    @pytest.mark.skipif(not WEBSOCKET_AVAILABLE, reason="websocket-client not installed")
+    def test_loop_exhausts_max_recv_naturally(self):
+        import websocket as _ws_mod
+        mock_ws = MagicMock()
+        mock_ws.recv.side_effect = ["frame1", "frame2", "frame3"]
+
+        with patch("commonhuman_core.ws.websocket.create_connection", return_value=mock_ws):
+            results = ws_inject("wss://example.com/ws", ["p"], timeout=1, max_recv=3)
+
+        assert len(results[0].responses) == 3
+
+    @pytest.mark.skipif(not WEBSOCKET_AVAILABLE, reason="websocket-client not installed")
+    def test_empty_frame_skipped(self):
+        import websocket as _ws_mod
+        mock_ws = MagicMock()
+        mock_ws.recv.side_effect = ["", "real_frame", _ws_mod.WebSocketTimeoutException]
+
+        with patch("commonhuman_core.ws.websocket.create_connection", return_value=mock_ws):
+            results = ws_inject("wss://example.com/ws", ["p"], timeout=1)
+
+        assert results[0].responses == ["real_frame"]
 
     @pytest.mark.skipif(not WEBSOCKET_AVAILABLE, reason="websocket-client not installed")
     def test_cookie_passed_in_header(self):

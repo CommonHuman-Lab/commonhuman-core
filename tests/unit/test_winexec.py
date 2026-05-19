@@ -260,6 +260,61 @@ class TestWinExecClientExecute:
 
         mock_dcom_inst.disconnect.assert_called_once()
 
+    def test_wmi_create_success_path(self, mock_impacket):
+        c, smb = self._make_client(mock_impacket)
+        mock_dcom_inst = MagicMock()
+        mock_dcom_cls = MagicMock(return_value=mock_dcom_inst)
+
+        mock_wmi = MagicMock()
+        mock_svc = MagicMock()
+        mock_login = MagicMock()
+        mock_login.NTLMLogin.return_value = mock_svc
+        mock_wmi.IWbemLevel1Login.return_value = mock_login
+
+        mock_proc_cls = MagicMock()
+        mock_svc.GetObject.return_value = (mock_proc_cls, MagicMock())
+
+        mock_out = MagicMock()
+        mock_out.ReturnValue = 0
+        mock_svc.ExecMethod.return_value = mock_out
+
+        mock_dcom_inst.CoCreateInstanceEx.return_value = MagicMock()
+
+        with patch("commonhuman_core.winexec.DCOMConnection", mock_dcom_cls, create=True):
+            with patch("commonhuman_core.winexec._wmi", mock_wmi, create=True):
+                with patch("commonhuman_core.winexec._NULL", MagicMock(), create=True):
+                    ret = c._wmi_create("whoami")
+
+        assert ret == 0
+
+    def test_wmi_create_disconnect_raises_suppressed(self, mock_impacket):
+        c, smb = self._make_client(mock_impacket)
+        mock_dcom_inst = MagicMock()
+        mock_dcom_cls = MagicMock(return_value=mock_dcom_inst)
+        mock_dcom_inst.CoCreateInstanceEx.side_effect = RuntimeError("fail")
+        mock_dcom_inst.disconnect.side_effect = OSError("already closed")
+
+        with patch("commonhuman_core.winexec.DCOMConnection", mock_dcom_cls, create=True):
+            with patch("commonhuman_core.winexec._wmi", MagicMock(), create=True):
+                with patch("commonhuman_core.winexec._NULL", MagicMock(), create=True):
+                    with pytest.raises(RuntimeError):
+                        c._wmi_create("whoami")
+
+    def test_execute_success_with_deletefile_failing(self, mock_impacket):
+        c, smb = self._make_client(mock_impacket)
+        smb.deleteFile.side_effect = OSError("access denied")
+
+        def fake_get(share, path, write_cb):
+            write_cb(b"result\n")
+
+        smb.getFile.side_effect = fake_get
+
+        with patch.object(c, "_wmi_create", return_value=0):
+            stdout, stderr, code = c.execute("whoami", timeout=5)
+
+        assert stdout == "result\n"
+        assert code == 0
+
 
 # ---------------------------------------------------------------------------
 # WinExecClient.close / context manager

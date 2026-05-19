@@ -21,8 +21,26 @@ from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-_WAIT_FIRST_PAGE = 2.0   # seconds for initial page load / SPA bootstrap
-_WAIT_SUBSEQUENT = 1.5   # seconds for subsequent navigations
+_WAIT_FIRST_PAGE = 1.0   # max seconds to wait for first page readyState=complete
+_WAIT_SUBSEQUENT = 0.75  # max seconds to wait for subsequent pages
+_SPA_SETTLE      = 0.25  # fixed pause after readyState=complete for SPA first render
+_POLL_INTERVAL   = 0.05  # polling granularity in seconds
+
+
+def _wait_for_ready(driver, timeout_s: float) -> None:
+    """Poll until document.readyState == 'complete' or timeout elapses, then settle."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            if driver.execute_script("return document.readyState") == "complete":
+                break
+        except Exception:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(_POLL_INTERVAL, remaining))
+    time.sleep(_SPA_SETTLE)
 
 
 def browser_crawl(
@@ -88,7 +106,7 @@ def browser_crawl(
         if cookies:
             try:
                 driver.get(origin)
-                time.sleep(0.3)
+                _wait_for_ready(driver, 0.5)
                 for pair in cookies.split(";"):
                     pair = pair.strip()
                     if "=" in pair:
@@ -103,7 +121,7 @@ def browser_crawl(
             try:
                 driver.get(url)
                 wait = _WAIT_FIRST_PAGE if depth == 0 else spa_wait_s
-                time.sleep(wait)
+                _wait_for_ready(driver, wait)
             except Exception as exc:
                 logger.debug("browser_crawl: page load failed %s: %s", url, exc)
                 continue
@@ -160,6 +178,9 @@ def _setup_driver(headless: bool, chromium_path: str, chromedriver_path: str):
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--no-first-run")
+    opts.add_argument("--blink-settings=imagesEnabled=false")
 
     if not chromium_path:
         import shutil

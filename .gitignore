@@ -21,6 +21,7 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
+*.py,cover
 
 # Type checking
 .mypy_cache/
@@ -33,3 +34,4 @@ htmlcov/
 .idea/
 .vscode/
 *.swp
+

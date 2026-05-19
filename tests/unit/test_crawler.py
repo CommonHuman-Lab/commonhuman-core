@@ -94,6 +94,42 @@ class TestExtractLinks:
         links = _extract_links('<a href="https://example.com/p#sec">x</a>', "https://example.com/")
         assert all("#" not in l for l in links)
 
+    def test_button_formaction_extracted(self):
+        """Lines 224-226: <button formaction> adds a link."""
+        html = '<button formaction="/submit-form">Submit</button>'
+        links = _extract_links(html, "https://example.com/")
+        assert any("submit-form" in l for l in links)
+
+    def test_data_href_extracted(self):
+        """Line 232: data-href attribute adds a link."""
+        html = '<div data-href="/page-via-data-attr">Click</div>'
+        links = _extract_links(html, "https://example.com/")
+        assert any("page-via-data-attr" in l for l in links)
+
+    def test_code_tag_path_extracted(self):
+        """Lines 238-245: text inside <code> matching path regex is extracted."""
+        html = '<code>/api/items/1</code>'
+        links = _extract_links(html, "https://example.com/")
+        assert any("api/items" in l for l in links)
+
+    def test_code_tag_non_path_text_not_extracted(self):
+        """Branch 244->exit: code text that doesn't match _CODE_PATH_RE is ignored."""
+        html = '<code>some plain descriptive text</code>'
+        links = _extract_links(html, "https://example.com/")
+        assert links == []
+
+    def test_button_without_formaction_does_not_add_link(self):
+        """Branch 225->229: button with empty formaction skips _add."""
+        html = '<button>No action button</button>'
+        links = _extract_links(html, "https://example.com/")
+        assert links == []
+
+    def test_button_with_javascript_formaction_skipped(self):
+        """Branch 225->229: button formaction starting with javascript: is skipped."""
+        html = '<button formaction="javascript:void(0)">Bad</button>'
+        links = _extract_links(html, "https://example.com/")
+        assert links == []
+
 
 # ---------------------------------------------------------------------------
 # _extract_forms
@@ -355,3 +391,39 @@ class TestCrawl:
         result = crawl("https://example.com/", inj, max_pages=10, threads=1)
         c_urls = [u for u in result.visited_urls if "/c" in u]
         assert len(c_urls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Form action enqueueing branches
+# ---------------------------------------------------------------------------
+
+
+class TestFormActionEnqueue:
+    def _make_injector(self, responses: list) -> HttpClient:
+        inj = MagicMock(spec=HttpClient)
+        inj.get.side_effect        = responses
+        inj.get_params.side_effect = lambda url: []
+        inj.same_origin.return_value = True
+        return inj
+
+    def test_form_action_not_enqueued_at_max_depth(self):
+        """Branch 149->145: depth == max_depth so form action is not queued."""
+        html = '<html><form action="/action" method="POST"><input name="q"></form></html>'
+        inj  = self._make_injector([_html_resp(html)])
+        result = crawl("https://example.com/", inj, max_pages=10, max_depth=0)
+        assert len(result.form_targets) == 1
+
+    def test_form_action_already_visited_not_enqueued(self):
+        """Branch 151->145: form action normalises to start URL (already visited)."""
+        html = '<html><form action="/" method="POST"><input name="q"></form></html>'
+        inj  = self._make_injector([_html_resp(html)])
+        result = crawl("https://example.com/", inj, max_pages=10, max_depth=1)
+        assert len(result.form_targets) == 1
+
+    def test_off_origin_form_action_not_enqueued(self):
+        """Branch 152->145: same_origin=True and form action is off-origin."""
+        html = '<html><form action="https://evil.com/steal" method="POST"><input name="q"></form></html>'
+        inj  = self._make_injector([_html_resp(html)])
+        inj.same_origin.side_effect = lambda a, b: "example.com" in a
+        result = crawl("https://example.com/", inj, max_pages=10, max_depth=1, same_origin=True)
+        assert len(result.form_targets) == 1

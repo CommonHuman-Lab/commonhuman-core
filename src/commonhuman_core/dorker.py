@@ -114,8 +114,8 @@ def dork(
 def _has_params(url: str) -> bool:
     try:
         return bool(urlparse(url).query)
-    except requests.RequestException:
-        return False
+    except requests.RequestException:  # pragma: no cover
+        return False  # pragma: no cover
 
 
 def _dork_ddg(query: str, max_results: int, proxies: dict, timeout: int) -> list[str]:

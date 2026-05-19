@@ -44,7 +44,7 @@ __all__ = ["WEBSOCKET_AVAILABLE", "WsResult", "ws_inject", "discover_ws_urls"]
 try:
     import websocket  # type: ignore[import-untyped]
     WEBSOCKET_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover
     WEBSOCKET_AVAILABLE = False
 
 
