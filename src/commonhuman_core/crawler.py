@@ -195,7 +195,9 @@ def _fetch_page(
 # ---------------------------------------------------------------------------
 
 
-_CODE_PATH_RE = re.compile(r'^(/[A-Za-z0-9/_\-]+(?:/\d+|/\{[^}]+\}|/:[A-Za-z][A-Za-z0-9_]*))')
+_CODE_PATH_RE = re.compile(
+    r'^(/(?:[A-Za-z0-9_\-]+/){2,}[A-Za-z0-9_\-]+(?:\?[^\s"\'<>]*)?)'
+)
 
 
 class _LinkParser(HTMLParser):
