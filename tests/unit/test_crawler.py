@@ -112,6 +112,18 @@ class TestExtractLinks:
         links = _extract_links(html, "https://example.com/")
         assert any("api/items" in l for l in links)
 
+    def test_code_tag_colon_param_extracted(self):
+        """:param style paths in <code> blocks must be extracted (regression for 01c5f65)."""
+        html = '<code>/rest/basket/:bid</code>'
+        links = _extract_links(html, "https://example.com/")
+        assert any("rest/basket" in l for l in links)
+
+    def test_code_tag_brace_param_extracted(self):
+        """{param} style paths in <code> blocks must be extracted (regression for 01c5f65)."""
+        html = '<code>/api/Products/{id}</code>'
+        links = _extract_links(html, "https://example.com/")
+        assert any("api/Products" in l for l in links)
+
     def test_code_tag_non_path_text_not_extracted(self):
         """Branch 244->exit: code text that doesn't match _CODE_PATH_RE is ignored."""
         html = '<code>some plain descriptive text</code>'
