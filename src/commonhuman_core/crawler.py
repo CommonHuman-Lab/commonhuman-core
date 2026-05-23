@@ -10,15 +10,19 @@ optional URL exclusion patterns.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import urllib.parse as up
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from .http.client import HttpClient
+
+if TYPE_CHECKING:
+    from .http.async_client import AsyncHttpClient
 
 # ---------------------------------------------------------------------------
 # Public data types
@@ -355,3 +359,109 @@ def _normalise(url: str) -> str:
         ))
     except Exception:  # pragma: no cover
         return url
+
+
+# ---------------------------------------------------------------------------
+# Async BFS crawler
+# ---------------------------------------------------------------------------
+
+
+async def async_crawl(
+    start_url:        str,
+    client:           "AsyncHttpClient",
+    max_pages:        int = 50,
+    max_depth:        int = 3,
+    same_origin:      bool = True,
+    exclude_patterns: Optional[List[str]] = None,
+) -> CrawlResult:
+    """Async BFS crawl from ``start_url`` using ``asyncio.gather`` for concurrency.
+
+    Drop-in counterpart to :func:`crawl` — same return type, no thread pool.
+    Pass an :class:`~commonhuman_core.http.AsyncHttpClient` (or subclass).
+    """
+    compiled_excludes = [re.compile(p) for p in (exclude_patterns or [])]
+
+    def _is_excluded(url: str) -> bool:
+        return any(p.search(url) for p in compiled_excludes)
+
+    result:  CrawlResult = CrawlResult()
+    visited: Set[str]    = set()
+    queue:   deque       = deque()
+    queue.append((_normalise(start_url), 0))
+
+    while queue and len(visited) < max_pages:
+        batch: List[Tuple[str, int]] = []
+        while queue and len(batch) < 20:
+            url, depth = queue.popleft()
+            norm = _normalise(url)
+            if norm in visited:
+                continue
+            if same_origin and not client.same_origin(norm, start_url):
+                continue
+            if _is_excluded(norm):
+                continue
+            visited.add(norm)
+            batch.append((norm, depth))
+
+        if not batch:
+            break
+
+        pages = await asyncio.gather(
+            *[_async_fetch_page(url, client) for url, _ in batch],
+            return_exceptions=True,
+        )
+
+        for (url, depth), page in zip(batch, pages):
+            if not isinstance(page, tuple):
+                continue
+            html, links, forms = page
+
+            params = client.get_params(url)
+            if params:
+                result.url_params.append((url, params))
+
+            if not html:
+                _path_parts = up.urlparse(url).path.split("/")
+                if any(p and p.lstrip("-").isdigit() for p in _path_parts):
+                    result.path_param_candidates.append(url)
+                continue
+
+            result.visited_urls.append(url)
+            result.page_sources[url] = html
+
+            for form in forms:
+                result.form_targets.append(form)
+                if depth < max_depth:
+                    action_norm = _normalise(form.action)
+                    if action_norm not in visited and not _is_excluded(action_norm):
+                        if not same_origin or client.same_origin(action_norm, start_url):
+                            queue.append((action_norm, depth + 1))
+
+            if depth < max_depth:
+                for link in links:
+                    norm = _normalise(link)
+                    if norm not in visited and not _is_excluded(norm):
+                        queue.append((norm, depth + 1))
+
+    return result
+
+
+async def _async_fetch_page(
+    url: str,
+    client: "AsyncHttpClient",
+) -> Optional[Tuple[str, List[str], List[FormTarget]]]:
+    try:
+        resp = await client.get(url)
+    except Exception:
+        return None
+
+    if resp.status_code >= 400:
+        return None
+
+    ct = resp.headers.get("content-type", "")
+    if "html" not in ct and "javascript" not in ct:
+        return ("", [], [])
+
+    html = resp.text
+    effective_url = str(resp.url) if resp.url else url
+    return html, _extract_links(html, effective_url), _extract_forms(html, effective_url)
