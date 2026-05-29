@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import urllib.parse as up
+from collections.abc import AsyncIterator, Coroutine
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -30,6 +31,16 @@ from ._cookies import parse_cookie_string
 _DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 
 
+class _NullContext:
+    """Async context manager that does nothing — used when no semaphore is set."""
+
+    async def __aenter__(self) -> "_NullContext":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        pass
+
+
 class AsyncHttpClient:
     """
     Async HTTP session with the same injection helper API as HttpClient.
@@ -38,21 +49,26 @@ class AsyncHttpClient:
     - request_count is thread-safe for asyncio (single-threaded event loop).
     - 429 back-off uses ``await asyncio.sleep()`` rather than blocking.
     - Static utilities (get_params, get_base_url, same_origin) are unchanged.
+    - Optional ``concurrency`` cap: limits in-flight requests via asyncio.Semaphore.
+    - ``request_batch()`` fires a list of coroutines and yields results as they
+      complete (not waiting for all), respecting the concurrency limit.
     """
 
     def __init__(
         self,
-        timeout:    int = 15,
-        proxy:      Optional[str] = None,
-        headers:    Optional[Dict[str, str]] = None,
-        cookies:    Optional[str] = None,
-        verify_ssl: bool = False,
-        delay:      float = 0.0,
-        auth:       Any = None,
+        timeout:     int = 15,
+        proxy:       Optional[str] = None,
+        headers:     Optional[Dict[str, str]] = None,
+        cookies:     Optional[str] = None,
+        verify_ssl:  bool = False,
+        delay:       float = 0.0,
+        auth:        Any = None,
+        concurrency: Optional[int] = None,
     ) -> None:
         self.timeout       = timeout
         self.request_count = 0
         self.delay         = max(0.0, delay)
+        self._semaphore    = asyncio.Semaphore(concurrency) if concurrency else None
 
         parsed_cookies = parse_cookie_string(cookies) if cookies else {}
         self._cookies_dict: Dict[str, str] = parsed_cookies
@@ -96,14 +112,15 @@ class AsyncHttpClient:
         params: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> httpx.Response:
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        self.request_count += 1
-        resp = await self._client.get(url, params=params, **kwargs)
-        return await self._handle_rate_limit(
-            resp,
-            lambda: self._client.get(url, params=params, **kwargs),
-        )
+        async with self._throttle():
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            self.request_count += 1
+            resp = await self._client.get(url, params=params, **kwargs)
+            return await self._handle_rate_limit(
+                resp,
+                lambda: self._client.get(url, params=params, **kwargs),
+            )
 
     async def post(
         self,
@@ -112,18 +129,49 @@ class AsyncHttpClient:
         json_body: Optional[Any] = None,
         **kwargs: Any,
     ) -> httpx.Response:
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        self.request_count += 1
-        resp = await self._client.post(url, data=data, json=json_body, **kwargs)
-        return await self._handle_rate_limit(
-            resp,
-            lambda: self._client.post(url, data=data, json=json_body, **kwargs),
-        )
+        async with self._throttle():
+            if self.delay:
+                await asyncio.sleep(self.delay)
+            self.request_count += 1
+            resp = await self._client.post(url, data=data, json=json_body, **kwargs)
+            return await self._handle_rate_limit(
+                resp,
+                lambda: self._client.post(url, data=data, json=json_body, **kwargs),
+            )
 
     async def head(self, url: str, **kwargs: Any) -> httpx.Response:
-        self.request_count += 1
-        return await self._client.head(url, **kwargs)
+        async with self._throttle():
+            self.request_count += 1
+            return await self._client.head(url, **kwargs)
+
+    async def request_batch(
+        self,
+        calls: List[Coroutine[Any, Any, httpx.Response]],
+    ) -> AsyncIterator[httpx.Response]:
+        """
+        Fire a list of coroutines concurrently and yield each response as it
+        completes — earlier responses are not held back waiting for slower ones.
+
+        Respects the ``concurrency`` semaphore if one was configured.
+        Exceptions from individual calls are re-raised per-item; wrap in
+        try/except inside the async for loop to handle them selectively.
+
+        Example::
+
+            async for resp in client.request_batch([
+                client.inject_get(url, "id", "1"),
+                client.inject_get(url, "id", "2"),
+                client.inject_get(url, "id", "3"),
+            ]):
+                print(resp.status_code)
+        """
+        tasks = [asyncio.create_task(c) for c in calls]
+        for fut in asyncio.as_completed(tasks):
+            yield await fut
+
+    def _throttle(self):
+        """Return the semaphore as a context manager, or a no-op if none configured."""
+        return self._semaphore if self._semaphore is not None else _NullContext()
 
     async def _handle_rate_limit(
         self,
